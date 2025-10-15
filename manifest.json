@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "GemScout",
+  "description": "AI-powered job discovery assistant using Chrome built-in Gemini Nano",
+  "version": "0.1",
+  "action": {
+    "default_popup": "src/popup/index.html"
+  },
+  "side_panel": {
+    "default_path": "src/sidepanel/index.html"
+  },
+  "permissions": [
+    "activeTab",
+    "storage",
+    "scripting",
+    "sidePanel"
+  ],
+  "background": {
+    "service_worker": "background/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/contentScript.js"]
+    }
+  ]
+}

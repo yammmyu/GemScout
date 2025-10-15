@@ -1,0 +1,1 @@
+console.log("GemScout content script loaded");chrome.runtime.onMessage.addListener((e,s,t)=>{switch(console.log("Content script received message:",e),e.type){case"ANALYZE_PAGE":const o={url:window.location.href,title:document.title};t({success:!0,data:o});break;default:t({success:!1,error:"Unknown message type"})}});
