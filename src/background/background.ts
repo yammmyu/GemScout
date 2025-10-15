@@ -110,44 +110,51 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       
       // Identify the active tab
       chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-        if (tabs[0]?.id) {
+        if (tabs[0]?.id && tabs[0]?.url) {
           const activeTab = tabs[0]
           console.log('Active tab identified:', activeTab.url)
           
-          // Send extract_snapshot message to the active tab
-          chrome.tabs.sendMessage(activeTab.id, { action: 'extract_snapshot' }, (snapshot) => {
-            if (chrome.runtime.lastError) {
-              console.error('Error communicating with content script:', chrome.runtime.lastError)
-              sendResponse({ success: false, error: chrome.runtime.lastError.message })
-              return
+          // Check if the current tab is a Chrome internal page
+          if (activeTab.url.startsWith('chrome://') || activeTab.url.startsWith('chrome-extension://') || activeTab.url.startsWith('moz-extension://')) {
+            console.error('Cannot run content script on Chrome internal pages:', activeTab.url)
+            sendResponse({ 
+              success: false, 
+              error: 'Content scripts cannot run on Chrome internal pages. Please navigate to a regular webpage (http:// or https://) and try again.' 
+            })
+            return
+          }
+          
+          // First, try to inject the content script if it's not already running
+          chrome.scripting.executeScript({
+            target: { tabId: activeTab.id },
+            func: () => {
+              // Check if our content script is already loaded
+              return typeof (window as any).gemscoutLoaded !== 'undefined'
             }
+          }, (injectionResults) => {
+            const isContentScriptLoaded = injectionResults?.[0]?.result === true
             
-            if (snapshot && !snapshot.error) {
-              console.log('=== DOM SNAPSHOT RECEIVED ===');
-              console.log('URL:', snapshot.url);
-              console.log('Text Length:', snapshot.text.length);
-              console.log('Links Count:', snapshot.links.length);
-              console.log('Text Sample (first 200 chars):', snapshot.text.substring(0, 200) + '...');
-              console.log('Links Sample (first 5):', snapshot.links.slice(0, 5));
-              console.log('=== END SNAPSHOT ===');
-              
-              // Store the snapshot for potential AI processing
-              chrome.storage.local.set({
-                lastSnapshot: {
-                  ...snapshot,
-                  timestamp: Date.now(),
-                  tabId: activeTab.id
+            if (!isContentScriptLoaded) {
+              console.log('Content script not detected, injecting...')
+              // Inject the content script
+              chrome.scripting.executeScript({
+                target: { tabId: activeTab.id },
+                files: ['content/contentScript.js']
+              }, () => {
+                if (chrome.runtime.lastError) {
+                  console.error('Failed to inject content script:', chrome.runtime.lastError.message)
+                  sendResponse({ success: false, error: 'Failed to inject content script: ' + chrome.runtime.lastError.message })
+                  return
                 }
-              })
-              
-              sendResponse({ 
-                success: true, 
-                snapshot: snapshot,
-                message: 'DOM snapshot extracted successfully'
+                
+                // Wait a moment for the script to initialize, then send message
+                setTimeout(() => {
+                  sendSnapshotMessage(activeTab.id!, sendResponse)
+                }, 100)
               })
             } else {
-              console.error('Failed to extract snapshot:', snapshot?.error)
-              sendResponse({ success: false, error: snapshot?.error || 'No snapshot received' })
+              console.log('Content script already loaded, sending message directly')
+              sendSnapshotMessage(activeTab.id!, sendResponse)
             }
           })
         } else {
@@ -162,6 +169,45 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: 'Unknown message type' })
   }
 })
+
+// Helper function to send snapshot message to content script
+function sendSnapshotMessage(tabId: number, sendResponse: (response: any) => void) {
+  chrome.tabs.sendMessage(tabId, { action: 'extract_snapshot' }, (snapshot) => {
+    if (chrome.runtime.lastError) {
+      console.error('Error communicating with content script:', chrome.runtime.lastError.message || chrome.runtime.lastError)
+      sendResponse({ success: false, error: chrome.runtime.lastError.message || 'Failed to communicate with content script' })
+      return
+    }
+    
+    if (snapshot && !snapshot.error) {
+      console.log('=== DOM SNAPSHOT RECEIVED ===');
+      console.log('URL:', snapshot.url);
+      console.log('Text Length:', snapshot.text.length);
+      console.log('Links Count:', snapshot.links.length);
+      console.log('Text Sample (first 200 chars):', snapshot.text.substring(0, 200) + '...');
+      console.log('Links Sample (first 5):', snapshot.links.slice(0, 5));
+      console.log('=== END SNAPSHOT ===');
+      
+      // Store the snapshot for potential AI processing
+      chrome.storage.local.set({
+        lastSnapshot: {
+          ...snapshot,
+          timestamp: Date.now(),
+          tabId: tabId
+        }
+      })
+      
+      sendResponse({ 
+        success: true, 
+        snapshot: snapshot,
+        message: 'DOM snapshot extracted successfully'
+      })
+    } else {
+      console.error('Failed to extract snapshot:', snapshot?.error)
+      sendResponse({ success: false, error: snapshot?.error || 'No snapshot received' })
+    }
+  })
+}
 
 // Handle tab updates to potentially auto-analyze new pages
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {

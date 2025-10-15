@@ -2,6 +2,9 @@
 
 console.log('GemScout content script loaded')
 
+// Set global flag to indicate content script is loaded
+;(window as any).gemscoutLoaded = true
+
 let overlayMounted = false
 let overlayContainer: HTMLElement | null = null
 
@@ -256,10 +259,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
           textLength: snapshot.text.length,
           linksCount: snapshot.links.length
         })
-        sendResponse(snapshot)
+        
+        // Ensure we send a proper response
+        if (snapshot && snapshot.url && snapshot.text && snapshot.links) {
+          console.log('Snapshot validation passed, sending response...')
+          sendResponse(snapshot)
+        } else {
+          console.error('Invalid snapshot data:', snapshot)
+          sendResponse({ error: 'Invalid snapshot data collected' })
+        }
       } catch (error) {
         console.error('Error collecting snapshot:', error)
-        sendResponse({ error: 'Failed to collect snapshot' })
+        sendResponse({ error: 'Failed to collect snapshot: ' + (error instanceof Error ? error.message : String(error)) })
       }
       break
       
@@ -280,6 +291,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     default:
       sendResponse({ success: false, error: 'Unknown message type: ' + messageType })
   }
+  
+  // Return true to indicate we will send a response asynchronously
+  return true
 })
 
 // Auto-analyze page if it looks like a job site

@@ -11,6 +11,7 @@ const Popup: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [jobMatches, setJobMatches] = useState<JobMatch[]>([])
   const [currentUrl, setCurrentUrl] = useState<string>('')
+  const [errorMessage, setErrorMessage] = useState<string>('')
 
   useEffect(() => {
     // Get current tab URL
@@ -23,18 +24,21 @@ const Popup: React.FC = () => {
 
   const analyzeCurrentPage = async () => {
     setIsAnalyzing(true)
+    setErrorMessage('')
     
     try {
       // Send discovery request to background script
       chrome.runtime.sendMessage({ type: 'start_discovery' }, (response) => {
         if (chrome.runtime.lastError) {
           console.error('Error communicating with background script:', chrome.runtime.lastError)
+          setErrorMessage('Failed to communicate with background script')
           setIsAnalyzing(false)
           return
         }
         
         if (response?.success) {
           console.log('Discovery completed successfully:', response)
+          setErrorMessage('')
           
           // Mock job matches for demonstration (in real implementation, this would come from AI analysis)
           setJobMatches([
@@ -44,12 +48,14 @@ const Popup: React.FC = () => {
           ])
         } else {
           console.error('Discovery failed:', response?.error)
+          setErrorMessage(response?.error || 'Discovery failed')
         }
         
         setIsAnalyzing(false)
       })
     } catch (error) {
       console.error('Error starting discovery:', error)
+      setErrorMessage('Unexpected error occurred')
       setIsAnalyzing(false)
     }
   }
@@ -82,6 +88,13 @@ const Popup: React.FC = () => {
             {currentUrl || 'Loading...'}
           </p>
         </div>
+
+        {/* Error Message */}
+        {errorMessage && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
+            <p className="text-sm text-red-700">{errorMessage}</p>
+          </div>
+        )}
 
         {/* Action Buttons */}
         <div className="space-y-2 mb-4">
