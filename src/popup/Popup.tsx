@@ -24,20 +24,33 @@ const Popup: React.FC = () => {
   const analyzeCurrentPage = async () => {
     setIsAnalyzing(true)
     
-    // Send message to content script to analyze the page
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (tab.id) {
-      chrome.tabs.sendMessage(tab.id, { type: 'ANALYZE_PAGE' }, (response) => {
+    try {
+      // Send discovery request to background script
+      chrome.runtime.sendMessage({ type: 'start_discovery' }, (response) => {
+        if (chrome.runtime.lastError) {
+          console.error('Error communicating with background script:', chrome.runtime.lastError)
+          setIsAnalyzing(false)
+          return
+        }
+        
         if (response?.success) {
-          // Mock job matches for demonstration
+          console.log('Discovery completed successfully:', response)
+          
+          // Mock job matches for demonstration (in real implementation, this would come from AI analysis)
           setJobMatches([
             { title: "Software Engineer", company: "Tech Corp", match: 95, url: "#" },
             { title: "Frontend Developer", company: "StartupXYZ", match: 88, url: "#" },
             { title: "React Developer", company: "BigTech Inc", match: 82, url: "#" }
           ])
+        } else {
+          console.error('Discovery failed:', response?.error)
         }
+        
         setIsAnalyzing(false)
       })
+    } catch (error) {
+      console.error('Error starting discovery:', error)
+      setIsAnalyzing(false)
     }
   }
 
@@ -77,7 +90,7 @@ const Popup: React.FC = () => {
             disabled={isAnalyzing}
             className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded transition-colors"
           >
-            {isAnalyzing ? 'Analyzing...' : 'Analyze Page for Jobs'}
+            {isAnalyzing ? 'Scanning Page...' : 'Scan Page'}
           </button>
           
           <button

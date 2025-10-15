@@ -104,6 +104,59 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       })
       return true
     
+    case 'start_discovery':
+      // Handle discovery request from popup
+      console.log('Starting discovery process...')
+      
+      // Identify the active tab
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]?.id) {
+          const activeTab = tabs[0]
+          console.log('Active tab identified:', activeTab.url)
+          
+          // Send extract_snapshot message to the active tab
+          chrome.tabs.sendMessage(activeTab.id, { action: 'extract_snapshot' }, (snapshot) => {
+            if (chrome.runtime.lastError) {
+              console.error('Error communicating with content script:', chrome.runtime.lastError)
+              sendResponse({ success: false, error: chrome.runtime.lastError.message })
+              return
+            }
+            
+            if (snapshot && !snapshot.error) {
+              console.log('=== DOM SNAPSHOT RECEIVED ===');
+              console.log('URL:', snapshot.url);
+              console.log('Text Length:', snapshot.text.length);
+              console.log('Links Count:', snapshot.links.length);
+              console.log('Text Sample (first 200 chars):', snapshot.text.substring(0, 200) + '...');
+              console.log('Links Sample (first 5):', snapshot.links.slice(0, 5));
+              console.log('=== END SNAPSHOT ===');
+              
+              // Store the snapshot for potential AI processing
+              chrome.storage.local.set({
+                lastSnapshot: {
+                  ...snapshot,
+                  timestamp: Date.now(),
+                  tabId: activeTab.id
+                }
+              })
+              
+              sendResponse({ 
+                success: true, 
+                snapshot: snapshot,
+                message: 'DOM snapshot extracted successfully'
+              })
+            } else {
+              console.error('Failed to extract snapshot:', snapshot?.error)
+              sendResponse({ success: false, error: snapshot?.error || 'No snapshot received' })
+            }
+          })
+        } else {
+          console.error('No active tab found')
+          sendResponse({ success: false, error: 'No active tab found' })
+        }
+      })
+      return true // Keep the response channel open for async response
+    
     default:
       console.log('Unknown message type:', request.type)
       sendResponse({ success: false, error: 'Unknown message type' })

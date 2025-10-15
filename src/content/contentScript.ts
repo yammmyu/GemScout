@@ -111,7 +111,78 @@ function showNotification(message: string) {
   }, 3000)
 }
 
-// Function to analyze current page
+// Function to collect DOM snapshot
+function collectSnapshot() {
+  const snapshot = {
+    url: window.location.href,
+    text: extractReadableText(),
+    links: extractLinks()
+  }
+  
+  console.log('DOM snapshot collected:', { 
+    url: snapshot.url, 
+    textLength: snapshot.text.length, 
+    linksCount: snapshot.links.length 
+  })
+  
+  return snapshot
+}
+
+// Extract readable text from the main body of the page
+function extractReadableText(): string {
+  // Remove script and style elements
+  const elementsToRemove = document.querySelectorAll('script, style, noscript, iframe')
+  const clonedBody = document.body.cloneNode(true) as HTMLElement
+  
+  // Remove unwanted elements from the clone
+  clonedBody.querySelectorAll('script, style, noscript, iframe').forEach(el => el.remove())
+  
+  // Get text content and clean it up
+  let text = clonedBody.innerText || clonedBody.textContent || ''
+  
+  // Clean up the text: normalize whitespace, remove extra line breaks
+  text = text
+    .replace(/\s+/g, ' ') // Replace multiple whitespace with single space
+    .replace(/\n\s*\n/g, '\n') // Remove empty lines
+    .trim()
+  
+  return text
+}
+
+// Extract all links with both text and valid href
+function extractLinks(): Array<{ href: string; text: string }> {
+  const links: Array<{ href: string; text: string }> = []
+  const linkElements = document.querySelectorAll('a[href]')
+  
+  linkElements.forEach((link) => {
+    const href = link.getAttribute('href')
+    const text = link.textContent?.trim()
+    
+    // Only include links with valid href and non-empty text
+    if (href && text && href !== '#' && !href.startsWith('javascript:')) {
+      // Convert relative URLs to absolute URLs
+      let absoluteHref: string
+      try {
+        absoluteHref = new URL(href, window.location.href).href
+      } catch (e) {
+        // If URL construction fails, skip this link
+        return
+      }
+      
+      // Avoid duplicate links (same href)
+      if (!links.find(l => l.href === absoluteHref)) {
+        links.push({
+          href: absoluteHref,
+          text: text
+        })
+      }
+    }
+  })
+  
+  return links
+}
+
+// Function to analyze current page (legacy)
 function analyzeCurrentPage() {
   const pageData = {
     url: window.location.href,
@@ -168,10 +239,28 @@ function detectJobIndicators(): boolean {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Content script received message:', request)
   
-  switch (request.type) {
+  // Handle both old 'type' format and new 'action' format
+  const messageType = request.type || request.action
+  
+  switch (messageType) {
     case 'ANALYZE_PAGE':
       const pageData = analyzeCurrentPage()
       sendResponse({ success: true, data: pageData })
+      break
+      
+    case 'extract_snapshot':
+      try {
+        const snapshot = collectSnapshot()
+        console.log('Sending DOM snapshot to background:', {
+          url: snapshot.url,
+          textLength: snapshot.text.length,
+          linksCount: snapshot.links.length
+        })
+        sendResponse(snapshot)
+      } catch (error) {
+        console.error('Error collecting snapshot:', error)
+        sendResponse({ error: 'Failed to collect snapshot' })
+      }
       break
       
     case 'TOGGLE_OVERLAY':
@@ -189,7 +278,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break
       
     default:
-      sendResponse({ success: false, error: 'Unknown message type' })
+      sendResponse({ success: false, error: 'Unknown message type: ' + messageType })
   }
 })
 
