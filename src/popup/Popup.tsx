@@ -20,8 +20,10 @@ const Popup: React.FC = () => {
   const [maxJobsFound, setMaxJobsFound] = useState(5)
   const [navigationPath, setNavigationPath] = useState<string[]>([])
   const [discoveredAt, setDiscoveredAt] = useState<string>('')
+  const [streamingActive, setStreamingActive] = useState(false)
+  const [jobsDisplayed, setJobsDisplayed] = useState(0)
 
-  // Load jobs from storage on component mount
+  // Load jobs from storage on component mount and set up streaming
   useEffect(() => {
     loadJobsFromStorage()
     
@@ -31,6 +33,48 @@ const Popup: React.FC = () => {
         setCurrentUrl(tabs[0].url)
       }
     })
+    
+    // Set up streaming port connection
+    const port = chrome.runtime.connect({ name: 'popup-stream' })
+    
+    port.onMessage.addListener((message) => {
+      if (message.type === 'jobs_update') {
+        console.log(`📢 Received streaming update: ${message.count} jobs available`)
+        
+        // Reload jobs from storage when we get updates
+        loadJobsFromStorage()
+        
+        if (message.count > 0) {
+          setIsAnalyzing(false)
+          setAnalysisProgress(100)
+          setStreamingActive(false)
+          setCanLoadMore(message.count > 3)
+          setErrorMessage('')
+          setJobsDisplayed(message.count)
+        }
+        
+        // Handle completion
+        if (message.isComplete) {
+          setIsAnalyzing(false)
+          setStreamingActive(false)
+          setAnalysisProgress(100)
+          
+          if (message.count === 0) {
+            setErrorMessage('No jobs found on this page')
+          }
+        }
+      } else if (message.type === 'analysis_error') {
+        console.log(`❌ Received analysis error: ${message.error}`)
+        setIsAnalyzing(false)
+        setStreamingActive(false)
+        setAnalysisProgress(0)
+        setErrorMessage(message.error || 'Analysis failed')
+      }
+    })
+    
+    return () => {
+      port.disconnect()
+    }
   }, [])
   
   // Function to load jobs from Chrome storage
@@ -52,74 +96,69 @@ const Popup: React.FC = () => {
 
   const analyzeCurrentPage = async (maxJobs: number = 5) => {
     setIsAnalyzing(true)
+    setStreamingActive(true)
     setErrorMessage('')
     setAnalysisProgress(0)
+    setJobs([]) // Clear existing jobs
+    setJobsDisplayed(0)
     
-    // Simulate progress updates
+    // Faster progress updates for streaming
     const progressInterval = setInterval(() => {
       setAnalysisProgress(prev => {
-        if (prev >= 90) return prev
-        return prev + Math.random() * 20
+        if (prev >= 95) return prev
+        return prev + Math.random() * 15
       })
-    }, 500)
+    }, 300)
     
     try {
-      // Send discovery request to background script with job limit
+      // Send streaming discovery request to background script
       chrome.runtime.sendMessage({ 
         type: 'start_discovery',
         maxJobs: maxJobs
-      }, async (response) => {
+      }, (response) => {
         clearInterval(progressInterval)
-        setAnalysisProgress(100)
         
         if (chrome.runtime.lastError) {
           console.error('Error communicating with background script:', chrome.runtime.lastError)
           setErrorMessage('Failed to communicate with background script')
           setIsAnalyzing(false)
+          setStreamingActive(false)
           setAnalysisProgress(0)
           return
         }
         
         if (response?.success) {
-          console.log('Discovery completed successfully:', response)
+          console.log('✅ Streaming analysis started:', response.message)
           setErrorMessage('')
           
-          // Reload jobs from storage to get the latest results
-          await loadJobsFromStorage()
+          // Analysis will continue via streaming updates
+          // Keep progress at 90% until first jobs arrive
+          setAnalysisProgress(90)
           
-          if (response.jobs && response.jobs.length > 0) {
-            console.log(`✅ Found ${response.jobs.length} job(s)`)
-            setMaxJobsFound(response.jobs.length)
-            setCanLoadMore(response.jobs.length >= maxJobs && maxJobs < 20)
-            
-            // Handle navigation path from breadth-first search
-            if (response.navigationPath) {
-              setNavigationPath(response.navigationPath)
-              setDiscoveredAt(response.finalUrl || '')
-              console.log('🧦 Navigation path:', response.navigationPath)
+          // Set up timeout to stop loading state if no jobs arrive
+          setTimeout(() => {
+            if (jobsDisplayed === 0) {
+              setIsAnalyzing(false)
+              setStreamingActive(false)
+              setAnalysisProgress(0)
+              setErrorMessage('No jobs found on this page')
             }
-          } else {
-            console.log('ℹ️ No jobs found after search')
-            setCanLoadMore(false)
-            setNavigationPath([])
-            setDiscoveredAt('')
-          }
+          }, 15000) // 15 second timeout
+          
         } else {
-          console.error('Discovery failed:', response?.error)
-          setErrorMessage(response?.error || 'Discovery failed')
-          setCanLoadMore(false)
-        }
-        
-        setTimeout(() => {
+          console.error('Discovery failed to start:', response?.error)
+          setErrorMessage(response?.error || 'Failed to start discovery')
           setIsAnalyzing(false)
+          setStreamingActive(false)
           setAnalysisProgress(0)
-        }, 500)
+        }
       })
     } catch (error) {
       clearInterval(progressInterval)
       console.error('Error starting discovery:', error)
       setErrorMessage('Unexpected error occurred')
       setIsAnalyzing(false)
+      setStreamingActive(false)
       setAnalysisProgress(0)
     }
   }
@@ -135,10 +174,32 @@ const Popup: React.FC = () => {
     chrome.runtime.openOptionsPage()
   }
   
+  const viewMoreJobs = async () => {
+    try {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+      if (tab.id) {
+        chrome.tabs.sendMessage(tab.id, {
+          action: 'get_more_jobs',
+          startIndex: jobsDisplayed,
+          count: 3
+        }, (response) => {
+          if (response?.success && response.jobs) {
+            setJobs(prevJobs => [...prevJobs, ...response.jobs])
+            setJobsDisplayed(prev => prev + response.jobs.length)
+            setCanLoadMore(response.hasMore)
+          }
+        })
+      }
+    } catch (error) {
+      console.error('Failed to load more jobs:', error)
+    }
+  }
+  
   const clearJobs = async () => {
     try {
       await chrome.storage.local.remove(['jobs', 'lastJobAnalysis'])
       setJobs([])
+      setJobsDisplayed(0)
       setLastAnalyzed('')
       console.log('Jobs cleared successfully')
     } catch (error) {
@@ -185,10 +246,10 @@ const Popup: React.FC = () => {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Scanning for Jobs...
+                  Finding Jobs...
                 </>
               ) : (
-                'Scan Current Page (Fast)'
+                'Find Jobs (Streaming)'
               )}
             </button>
             
@@ -202,17 +263,24 @@ const Popup: React.FC = () => {
               </div>
             )}
             
-            {/* Find More Jobs Button */}
-            {canLoadMore && !isAnalyzing && (
+            {/* View More Jobs Button - for streaming */}
+            {canLoadMore && !isAnalyzing && jobs.length > 0 && (
               <button
-                onClick={() => analyzeCurrentPage(15)}
+                onClick={viewMoreJobs}
                 className="w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded transition-colors flex items-center justify-center text-sm"
               >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
                 </svg>
-                Find More Jobs (Up to 15)
+                View More Jobs (Next 3)
               </button>
+            )}
+            
+            {/* Streaming indicator */}
+            {streamingActive && (
+              <div className="text-sm text-blue-600 text-center p-2 bg-blue-50 rounded">
+                🌊 Finding jobs in background... {jobs.length} found so far
+              </div>
             )}
           </div>
           

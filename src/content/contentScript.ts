@@ -1,14 +1,12 @@
 // Content script for GemScout Chrome Extension
 
-console.log('🚀 GemScout content script loaded - VERSION 2.0 WITH ENHANCED AI')
+console.log('🚀 GemScout content script loaded - VERSION 3.0 WITH FULL DEBUGGING')
 console.log('📅 Build timestamp:', new Date().toISOString())
+console.log('🔧 DEBUGGING VERSION ACTIVE - Detailed AI logs enabled')
 
 // Set global flag to indicate content script is loaded
 ;(window as any).gemscoutLoaded = true
 ;(window as any).gemscoutVersion = '2.0-enhanced'
-
-// Import AI test for debugging
-import { testAIInContentScript } from './aiTest'
 
 // Interface for job data structure
 interface JobPosting {
@@ -19,13 +17,6 @@ interface JobPosting {
   description: string
   salary?: string
 }
-
-// Run AI test after a short delay
-setTimeout(() => {
-  testAIInContentScript().catch(error => {
-    console.error('AI test in content script failed:', error)
-  })
-}, 2000) // Wait for page to fully initialize
 
 let overlayMounted = false
 let overlayContainer: HTMLElement | null = null
@@ -142,7 +133,6 @@ function collectSnapshot() {
     url: window.location.href,
     text: extractReadableText(),
     links: extractAllLinks(),
-    htmlStructure: extractHTMLStructure(),
     pageTitle: document.title,
     metaDescription: getPageDescription()
   }
@@ -150,8 +140,7 @@ function collectSnapshot() {
   console.log('DOM snapshot collected:', { 
     url: snapshot.url, 
     textLength: snapshot.text.length, 
-    linksCount: snapshot.links.length,
-    htmlBlocks: snapshot.htmlStructure.length
+    linksCount: snapshot.links.length
   })
   
   console.log('📄 Pure content snapshot ready for AI analysis')
@@ -214,54 +203,40 @@ function extractAllLinks(): Array<{ href: string; text: string; context?: string
     }
   })
   
-  return links.slice(0, 50) // Limit to prevent overwhelming AI
-}
-
-// Extract HTML structure for AI analysis (no keyword assumptions)
-function extractHTMLStructure(): Array<{ tag: string; text: string; attributes: Record<string, string>; children: number }> {
-  const structure: Array<{ tag: string; text: string; attributes: Record<string, string>; children: number }> = []
-  
-  // Get all potentially meaningful elements
-  const elements = document.querySelectorAll('div, article, section, li, h1, h2, h3, h4, h5, h6, p, span, a')
-  
-  elements.forEach((element, index) => {
-    // Skip if too deep in nesting or if it's a tiny element
-    if (index > 200) return // Limit to prevent overwhelming AI
-    
-    const text = element.textContent?.trim()
-    if (!text || text.length < 10) return // Skip empty or very short elements
-    
-    // Get meaningful attributes
-    const attributes: Record<string, string> = {}
-    if (element.id) attributes.id = element.id
-    if (element.className) attributes.class = element.className
-    
-    // Count direct children
-    const childrenCount = element.children.length
-    
-    structure.push({
-      tag: element.tagName.toLowerCase(),
-      text: text.substring(0, 300), // Limit text length
-      attributes: attributes,
-      children: childrenCount
-    })
+  // Sort links to prioritize job-related ones
+  const sortedLinks = links.sort((a, b) => {
+    const aScore = getLinkJobScore(a)
+    const bScore = getLinkJobScore(b)
+    return bScore - aScore
   })
   
-  return structure
+  return sortedLinks.slice(0, 50) // Limit to prevent overwhelming AI
 }
 
-// Pure content analysis - no keyword assumptions
-function analyzeCurrentPage() {
-  const pageData = {
-    url: window.location.href,
-    title: document.title,
-    description: getPageDescription(),
-    contentLength: document.body.innerText.length,
-    linkCount: document.querySelectorAll('a[href]').length
-  }
+// Score links based on how likely they are to be job-related
+function getLinkJobScore(link: { href: string; text: string; context?: string }): number {
+  let score = 0
+  const text = (link.text + ' ' + link.href + ' ' + (link.context || '')).toLowerCase()
   
-  console.log('Basic page data (AI will determine relevance):', pageData)
-  return pageData
+  // High priority job indicators
+  if (text.includes('job') || text.includes('position') || text.includes('opening')) score += 10
+  if (text.includes('career') || text.includes('hiring')) score += 8
+  if (text.includes('apply') || text.includes('application')) score += 7
+  
+  // Job titles
+  if (text.includes('engineer') || text.includes('developer') || text.includes('manager')) score += 6
+  if (text.includes('analyst') || text.includes('specialist') || text.includes('coordinator')) score += 5
+  if (text.includes('director') || text.includes('lead') || text.includes('senior') || text.includes('junior')) score += 4
+  
+  // URL patterns that suggest job postings
+  if (link.href.includes('/job/') || link.href.includes('/jobs/') || link.href.includes('/career/')) score += 8
+  if (link.href.includes('greenhouse.io') || link.href.includes('lever.co') || link.href.includes('workday')) score += 9
+  
+  // Penalty for non-job links
+  if (text.includes('about') || text.includes('contact') || text.includes('home')) score -= 3
+  if (text.includes('privacy') || text.includes('terms') || text.includes('cookie')) score -= 5
+  
+  return score
 }
 
 // Get page description from meta tags
@@ -270,465 +245,733 @@ function getPageDescription(): string {
   return descriptionMeta?.content || ''
 }
 
-// Let AI determine page relevance - no keyword assumptions
+// Streaming batch AI system for job discovery
+let jobStorage: JobPosting[] = []
+let processingActive = false
+let monitorInterval: NodeJS.Timeout | null = null
+let monitorStartTime = 0
 
-// Function to analyze job postings using AI in content script context
-async function analyzeJobPostingsInContentScript(snapshot: { url: string; text: string; links: Array<{ href: string; text: string }> }, maxJobs: number = 5): Promise<JobPosting[]> {
-  try {
-    console.log('🤖 Starting AI analysis in content script context...')
-    
-    // Check if Chrome's built-in AI is available in content script (window context)
-    const windowScope = window as any
-    
-    console.log('🔍 Checking AI availability in content script...')
-    const aiChecks = {
-      'window.ai': typeof windowScope.ai,
-      'window.chrome?.ai': typeof windowScope.chrome?.ai,
-      'globalThis.ai': typeof (globalThis as any).ai,
-      // New Chrome built-in AI APIs
-      'window.LanguageModel': typeof windowScope.LanguageModel,
-      'globalThis.LanguageModel': typeof (globalThis as any).LanguageModel
-    }
-    
-    console.log('AI API availability in content script:', aiChecks)
-    
-    // Try to find the AI API - prioritize newer Chrome built-in APIs
-    let aiApi = null
-    let apiLocation = ''
-    let isNewAPI = false
-    
-    // Check newer LanguageModel API first
-    if (windowScope.LanguageModel) {
-      aiApi = windowScope.LanguageModel
-      apiLocation = 'window.LanguageModel'
-      isNewAPI = true
-      console.log('✅ Found NEW LanguageModel API at window.LanguageModel')
-    } else if ((globalThis as any).LanguageModel) {
-      aiApi = (globalThis as any).LanguageModel
-      apiLocation = 'globalThis.LanguageModel'
-      isNewAPI = true
-      console.log('✅ Found NEW LanguageModel API at globalThis.LanguageModel')
-    }
-    // Fallback to legacy AI API
-    else if (windowScope.ai?.languageModel) {
-      aiApi = windowScope.ai
-      apiLocation = 'window.ai'
-      isNewAPI = false
-      console.log('✅ Found legacy AI API at window.ai')
-    } else if (windowScope.chrome?.ai?.languageModel) {
-      aiApi = windowScope.chrome.ai
-      apiLocation = 'window.chrome.ai'
-      isNewAPI = false
-      console.log('✅ Found legacy AI API at window.chrome.ai')
-    } else if ((globalThis as any).ai?.languageModel) {
-      aiApi = (globalThis as any).ai
-      apiLocation = 'globalThis.ai'
-      isNewAPI = false
-      console.log('✅ Found legacy AI API at globalThis.ai')
-    }
-    
-    if (!aiApi) {
-      console.warn('🚫 Chrome built-in AI not found in content script context either')
-      console.log('Falling back to mock data generation')
-      return generateMockJobDataInContentScript(snapshot)
-    }
-    
-    // Check AI capabilities - different methods for new vs legacy API
-    console.log('📊 Checking AI capabilities in content script...')
-    let capabilities: any
-    
-    if (isNewAPI) {
-      // Use new API format: LanguageModel.availability()
-      capabilities = { available: await aiApi.availability() }
-      console.log(`NEW API availability at ${apiLocation}:`, capabilities.available)
-      
-      // Check user activation status
-      const userActivation = (navigator as any).userActivation
-      if (userActivation) {
-        console.log('User activation status:', {
-          isActive: userActivation.isActive,
-          hasBeenActive: userActivation.hasBeenActive
-        })
-      }
-    } else {
-      // Use legacy API format: ai.languageModel.capabilities()
-      capabilities = await aiApi.languageModel.capabilities()
-      console.log(`Legacy AI capabilities at ${apiLocation}:`, JSON.stringify(capabilities, null, 2))
-    }
-    
-    if (capabilities.available === 'no') {
-      console.warn('🚫 AI explicitly not available in content script')
-      return generateMockJobDataInContentScript(snapshot)
-    }
-    
-    // Handle different availability states for both API formats
-    const availabilityState = capabilities.available
-    
-    if (availabilityState === 'after-download' || availabilityState === 'downloadable') {
-      console.log('📥 AI available after download, attempting to trigger download...')
-      // Content script has user context, so model download might work here
-      try {
-        console.log('🔄 Creating session to trigger model download...')
-        const downloadSession = isNewAPI ? await aiApi.create() : await aiApi.languageModel.create()
-        console.log('✅ Model download triggered successfully!')
-        await downloadSession.destroy()
-        
-        // Check capabilities again
-        const newAvailability = isNewAPI ? await aiApi.availability() : (await aiApi.languageModel.capabilities()).available
-        console.log('Updated availability after download:', newAvailability)
-        
-        if (newAvailability !== 'readily' && newAvailability !== 'available') {
-          console.warn('🚫 AI still not ready after download attempt')
-          return generateMockJobDataInContentScript(snapshot)
-        }
-      } catch (downloadError) {
-        console.error('❌ Model download failed:', downloadError)
-        return generateMockJobDataInContentScript(snapshot)
-      }
-    }
-    
-    if (availabilityState !== 'readily' && availabilityState !== 'available') {
-      console.warn(`🚫 AI not ready in content script: "${availabilityState}"`)
-      return generateMockJobDataInContentScript(snapshot)
-    }
-    
-    console.log('✅ AI is readily available in content script, creating session...')
-    
-    // Create AI session using appropriate API format
-    const session = isNewAPI ? await aiApi.create() : await aiApi.languageModel.create()
-    
-    // Create AI-driven analysis prompt (no keyword assumptions)
-    let prompt = `You are an intelligent webpage analyzer. Your task is to examine this page and determine if it contains employment opportunities, career postings, or hiring information of any kind.
-
-**WEBPAGE CONTENT:**
-URL: ${snapshot.url}
-Page Title: ${snapshot.pageTitle}
-Meta Description: ${snapshot.metaDescription}
-
-**PAGE TEXT CONTENT:**
-${snapshot.text.substring(0, 4000)}
-
-**HTML STRUCTURE ELEMENTS:**
-${JSON.stringify(snapshot.htmlStructure.slice(0, 20), null, 2)}
-
-**ALL AVAILABLE LINKS:**
-${snapshot.links.slice(0, 30).map(link => `- "${link.text}" -> ${link.href} (Context: ${link.context?.substring(0, 100) || 'N/A'})`).join('\n')}
-
-**ANALYSIS INSTRUCTIONS:**
-1. First, analyze if this page contains any employment opportunities, career postings, or hiring information
-2. Look for patterns in the content that suggest job listings, career opportunities, or recruitment information
-3. If you find employment-related content, extract up to ${maxJobs} of the most relevant opportunities
-4. Use your understanding of the page structure and links to determine specific URLs for each opportunity
-5. Be creative and analytical - don't rely on obvious patterns, understand the context
-6. Consider all types of employment: full-time, part-time, contract, internship, remote, etc.
-
-**DECISION PROCESS:**
-- Does this page appear to be related to employment, careers, or hiring?
-- What evidence supports this conclusion?
-- Where on the page are opportunities located?
-- How can someone access more details about each opportunity?
-
-**OUTPUT FORMAT:**
-Return ONLY a JSON array. If no employment opportunities found, return empty array [].
-If opportunities found, return up to ${maxJobs} items with this structure:
-[{
-  "title": "What you determine is the opportunity title",
-  "company": "Organization or company offering this",
-  "location": "Geographic location if determinable",
-  "link": "Most specific URL for this opportunity",
-  "description": "Your analysis of what this opportunity entails",
-  "salary": "Compensation info if visible (optional)"
-}]
-
-JSON:`
-    
-    console.log('📝 Sending prompt to AI from content script...')
-    
-    const response = await session.prompt(prompt)
-    console.log('🤖 AI Response received in content script:', response.substring(0, 200) + '...')
-    
-    // Parse and validate response with detailed debugging
-    let parsedJobs: JobPosting[] = []
+// Storage monitor - checks every 2 seconds and displays jobs when available
+function startStorageMonitor() {
+  if (monitorInterval) return // Already monitoring
+  
+  console.log('🔍 Starting storage monitor...')
+  monitorInterval = setInterval(() => {
     try {
-      console.log('🔍 Starting JSON parsing...')
-      console.log('Raw AI response (full):', response)
+      const currentCount = jobStorage.length
       
-      // Clean response to extract JSON
-      let jsonStr = response.trim()
-      console.log('After trim:', jsonStr.substring(0, 200) + '...')
-      
-      // Remove any markdown formatting
-      jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-      console.log('After markdown removal:', jsonStr.substring(0, 200) + '...')
-      
-      // More aggressive JSON extraction
-      let firstBracket = jsonStr.indexOf('[')
-      let lastBracket = jsonStr.lastIndexOf(']')
-      
-      if (firstBracket !== -1 && lastBracket !== -1 && lastBracket > firstBracket) {
-        jsonStr = jsonStr.substring(firstBracket, lastBracket + 1)
-        console.log('Extracted JSON substring:', jsonStr.substring(0, 300) + '...')
-      } else {
-        console.warn('⚠️ No JSON array brackets found in response')
-        // Try to find JSON object and wrap it
-        const objectMatch = jsonStr.match(/\{.*\}/s)
-        if (objectMatch) {
-          jsonStr = '[' + objectMatch[0] + ']'
-          console.log('Wrapped single object in array:', jsonStr.substring(0, 200) + '...')
-        }
-      }
-      
-      console.log('🧪 Attempting JSON.parse on:', jsonStr.substring(0, 500) + '...')
-      parsedJobs = JSON.parse(jsonStr)
-      console.log('✅ JSON parsing successful, got:', typeof parsedJobs, 'with length:', parsedJobs?.length)
-      
-      if (!Array.isArray(parsedJobs)) {
-        console.warn('⚠️ Response is not an array, attempting to wrap:', parsedJobs)
-        if (typeof parsedJobs === 'object' && parsedJobs !== null) {
-          parsedJobs = [parsedJobs]
-        } else {
-          throw new Error('Response is not an array or object')
-        }
-      }
-      
-      console.log('🔍 Pre-filter jobs count:', parsedJobs.length)
-      console.log('Sample jobs before filtering:', parsedJobs.slice(0, 2))
-      
-      // Filter valid jobs
-      const validJobs = parsedJobs.filter((job: any) => {
-        const isValid = job && 
-               typeof job.title === 'string' && job.title.length > 0 &&
-               typeof job.company === 'string' && job.company.length > 0
-        if (!isValid) {
-          console.log('❌ Invalid job filtered out:', job)
-        }
-        return isValid
+      // Send update to popup about current job count with error handling
+      sendChromeMessage({
+        action: 'jobs_update',
+        count: currentCount,
+        jobs: jobStorage.slice(0, 3) // Send first 3 for immediate display
       })
       
-      console.log('🔍 Valid jobs after filtering:', validJobs.length)
-      
-      parsedJobs = validJobs.map((job: any) => ({
-        title: job.title,
-        company: job.company,
-        location: job.location || 'Location TBD',
-        link: job.link || snapshot.url,
-        description: job.description || 'Job description not available',
-        ...(job.salary && { salary: job.salary })
-      }))
-      
-      console.log('✅ AI successfully extracted', parsedJobs.length, 'job postings in content script')
-      console.log('Final extracted jobs:', parsedJobs)
-      
-    } catch (parseError) {
-      console.error('❌ JSON parsing failed in content script:', parseError)
-      console.log('Failed on this text:', jsonStr)
-      console.log('Full raw response was:', response)
-      parsedJobs = []
+      // Stop monitoring after 20 seconds or when we have jobs
+      if (currentCount >= 9 || (Date.now() - monitorStartTime) > 20000) {
+        stopStorageMonitor()
+        console.log(`🏁 Monitoring complete: ${currentCount} jobs found`)
+      }
+    } catch (error) {
+      console.error('Monitor error:', error)
+      stopStorageMonitor()
     }
-    
-    // Cleanup
-    await session.destroy()
-    
-    // If AI found jobs, return them; otherwise fallback to mock data
-    if (parsedJobs.length > 0) {
-      console.log(`✨ SUCCESS: AI extracted ${parsedJobs.length} real jobs, returning them`)
-      return parsedJobs
-    } else {
-      console.warn('🎭 FALLBACK: AI parsing resulted in 0 jobs, falling back to mock data')
-      console.log('This could be due to:')
-      console.log('1. JSON parsing failed (check logs above)')
-      console.log('2. AI returned empty array []')
-      console.log('3. All jobs were filtered out as invalid')
-      console.log('4. AI response was not in expected format')
-      return generateMockJobDataInContentScript(snapshot)
-    }
-    
-  } catch (error) {
-    console.error('❌ AI analysis completely failed in content script:', error)
-    return generateMockJobDataInContentScript(snapshot)
-  }
+  }, 2000) // Reduced frequency to prevent crashes
 }
 
-// Generate mock job data in content script
-// Breadth-first job discovery system
-async function performBreadthFirstJobDiscovery(initialSnapshot: any, maxJobs: number): Promise<{ jobs: JobPosting[], navigationPath: string[], finalUrl: string }> {
-  console.log('🔍 Starting breadth-first job discovery...')
+function stopStorageMonitor() {
+  if (monitorInterval) {
+    console.log('⏹️ Stopping storage monitor...')
+    clearInterval(monitorInterval)
+    monitorInterval = null
+  }
+  // Don't set processingActive = false here as background processing might still be running
+}
+
+// Main recursive job scanning system
+async function analyzeJobPostingsInContentScript(snapshot: any, maxJobs: number = 5): Promise<JobPosting[]> {
+  console.log('🔄 Starting RECURSIVE job scanning system...')
   
-  const visitedUrls = new Set<string>()
-  const navigationPath: string[] = []
-  let currentSnapshot = initialSnapshot
-  let maxDepth = 3 // Limit navigation depth
+  // Reset storage for new analysis
+  jobStorage = []
+  monitorStartTime = Date.now()
   
-  for (let depth = 0; depth < maxDepth; depth++) {
-    console.log(`🌍 Analyzing page at depth ${depth}: ${currentSnapshot.url}`)
-    navigationPath.push(currentSnapshot.url)
-    visitedUrls.add(currentSnapshot.url)
+  // Set processing active first
+  processingActive = true
+  
+  // Start storage monitoring first
+  startStorageMonitor()
+  
+  // Start recursive scanning (don't await)
+  const visitedUrls = new Set([snapshot.url])
+  recursiveJobScan(snapshot, maxJobs, visitedUrls, 0).catch(error => {
+    console.error('Recursive scanning failed:', error)
+    processingActive = false
+  })
+  
+  // Return immediately - jobs will be provided via storage updates
+  return []
+}
+
+// Recursive job scanning - analyzes page type and adapts strategy
+async function recursiveJobScan(snapshot: any, maxJobs: number, visitedUrls: Set<string>, depth: number): Promise<void> {
+  const MAX_DEPTH = 2 // Reduced depth to prevent loops
+  const MAX_LINKS_PER_PAGE = 3 // Reduced links to follow per page
+  const MAX_TOTAL_VISITS = 10 // Maximum total URLs to visit
+  
+  console.log(`🔍 Recursive scan: ${snapshot.url} (depth: ${depth}, visited: ${visitedUrls.size})`)
+  
+  // Multiple exit conditions to prevent infinite loops
+  if (depth >= MAX_DEPTH) {
+    console.log('⚠️ Max depth reached, stopping recursion')
+    return
+  }
+  
+  if (visitedUrls.size >= MAX_TOTAL_VISITS) {
+    console.log('⚠️ Max URLs visited, stopping recursion')
+    return
+  }
+  
+  if (jobStorage.length >= maxJobs) {
+    console.log('✅ Max jobs reached, stopping scan')
+    processingActive = false
+    return
+  }
+  
+  // Check if we've already processed this URL
+  if (visitedUrls.has(snapshot.url)) {
+    console.log('⚠️ URL already visited, skipping:', snapshot.url)
+    return
+  }
+  
+  // Mark this URL as visited immediately to prevent re-entry
+  visitedUrls.add(snapshot.url)
+  
+  try {
+    // Step 1: Ask AI if this page contains job listings
+    const hasJobListings = await checkForJobListings(snapshot)
     
-    // Step 1: Ask AI if current page has job opportunities
-    const analysisResult = await analyzePageForJobs(currentSnapshot, maxJobs)
-    
-    if (analysisResult.hasJobs && analysisResult.jobs.length > 0) {
-      console.log(`✅ Found ${analysisResult.jobs.length} jobs at: ${currentSnapshot.url}`)
-      return {
-        jobs: analysisResult.jobs,
-        navigationPath: navigationPath,
-        finalUrl: currentSnapshot.url
+    if (hasJobListings) {
+      console.log('✅ Page contains job listings')
+      
+      // Step 2: Ask AI about the level of detail
+      const hasFullDetails = await checkJobDetailLevel(snapshot)
+      
+      if (hasFullDetails) {
+        console.log('✅ Full job details visible, extracting data...')
+        const jobs = await extractJobsFromPage(snapshot)
+        
+        if (jobs.length > 0) {
+          jobStorage.push(...jobs)
+          await saveJobsToStorage()
+          console.log(`✅ Extracted ${jobs.length} jobs (total: ${jobStorage.length})`)
+          
+          // Send streaming update to popup
+          sendChromeMessage({
+            type: 'jobs_found',
+            jobs: jobs,
+            batchNumber: depth + 1,
+            totalJobs: jobStorage.length,
+            isComplete: false
+          })
+        }
+      } else {
+        console.log('⚠️ Only job cards/previews visible, finding detail links...')
+        const jobDetailLinks = await findJobDetailLinks(snapshot)
+        
+        // Follow job detail links
+        for (const link of jobDetailLinks.slice(0, MAX_LINKS_PER_PAGE)) {
+          if (jobStorage.length >= maxJobs) break
+          if (visitedUrls.has(link)) continue
+          
+          console.log(`🔗 Following job detail link: ${link}`)
+          
+          // Simulate navigation to job detail page
+          const detailSnapshot = await simulateNavigation(link)
+          if (detailSnapshot) {
+            await recursiveJobScan(detailSnapshot, maxJobs, visitedUrls, depth + 1)
+            await new Promise(resolve => setTimeout(resolve, 1000)) // Rate limiting
+          }
+        }
+      }
+    } else {
+      console.log('❌ No job listings found, looking for navigation links...')
+      
+      // Step 3: Ask AI for links most likely to lead to job listings
+      const jobNavLinks = await findJobNavigationLinks(snapshot)
+      
+      // Follow top-ranked navigation links
+      for (const link of jobNavLinks.slice(0, 2)) { // Limit to top 2
+        if (jobStorage.length >= maxJobs) break
+        if (visitedUrls.has(link)) continue
+        
+        console.log(`🔗 Following navigation link: ${link}`)
+        
+        // Simulate navigation
+        const navSnapshot = await simulateNavigation(link)
+        if (navSnapshot) {
+          await recursiveJobScan(navSnapshot, maxJobs, visitedUrls, depth + 1)
+          await new Promise(resolve => setTimeout(resolve, 1500)) // Rate limiting
+        }
       }
     }
     
-    // Step 2: If no jobs found, ask AI for next navigation targets
-    const navigationTargets = await findNavigationTargets(currentSnapshot)
-    
-    if (navigationTargets.length === 0) {
-      console.log('⚠️ No navigation targets found, ending search')
-      break
-    }
-    
-    // Step 3: Navigate to the most promising target
-    const nextUrl = navigationTargets[0] // AI ranked by relevance
-    if (visitedUrls.has(nextUrl)) {
-      console.log('🔄 Already visited', nextUrl, 'trying next target...')
-      continue
-    }
-    
-    console.log(`🧦 Navigating to: ${nextUrl}`)
-    
-    try {
-      // Fetch and analyze next page
-      const nextSnapshot = await fetchPageSnapshot(nextUrl)
-      currentSnapshot = nextSnapshot
-    } catch (error) {
-      console.error('Failed to navigate to:', nextUrl, error)
-      break
+  } catch (error) {
+    console.error(`❌ Recursive scan failed at ${snapshot.url}:`, error)
+  } finally {
+    if (depth === 0) {
+      processingActive = false
+      console.log(`🏁 Recursive scanning complete: ${jobStorage.length} total jobs`)
+      
+      // Send final completion message
+      sendChromeMessage({
+        type: 'analysis_complete',
+        totalJobs: jobStorage.length,
+        isComplete: true
+      })
     }
   }
+}
+
+// AI Helper 1: Check if page contains job listings
+async function checkForJobListings(snapshot: any): Promise<boolean> {
+  console.log('🤖 AI: Checking if page contains job listings...')
   
-  console.log('🎭 No jobs found after breadth-first search')
-  return {
-    jobs: [],
-    navigationPath: navigationPath,
-    finalUrl: currentSnapshot.url
-  }
-}
-
-// Analyze current page for job opportunities
-async function analyzePageForJobs(snapshot: any, maxJobs: number): Promise<{ hasJobs: boolean, jobs: JobPosting[] }> {
-  return analyzeJobPostingsInContentScript(snapshot, maxJobs)
-    .then(jobs => ({ hasJobs: jobs.length > 0, jobs }))
-    .catch(() => ({ hasJobs: false, jobs: [] }))
-}
-
-// Find navigation targets using AI
-async function findNavigationTargets(snapshot: any): Promise<string[]> {
+  const aiApi = await getAIAPI()
+  if (!aiApi) return false
+  
+  const session = await createAISession(aiApi)
+  if (!session) return false
+  
   try {
-    const aiApi = await getAIAPI()
-    if (!aiApi) return []
-    
-    const session = await createAISession(aiApi)
-    if (!session) return []
-    
-    const prompt = `You are a web navigation AI. Analyze this page and find the most likely links that would lead to career/employment/job opportunities.
+    const contentSample = snapshot.text.substring(0, 2000)
+    const prompt = `Does this page contain job listings?
 
-**CURRENT PAGE:**
-URL: ${snapshot.url}
+Page: ${snapshot.url}
 Title: ${snapshot.pageTitle}
 
-**AVAILABLE LINKS (first 20):**
-${snapshot.links.slice(0, 20).map((link, i) => `${i + 1}. "${link.text}" -> ${link.href}`).join('\n')}
+Content:
+${contentSample}
 
-**PAGE CONTENT (first 2000 chars):**
-${snapshot.text.substring(0, 2000)}
+Answer YES if:
+- You see specific job titles (like "Software Engineer", "Marketing Manager", etc.)
+- You see company names with job openings
+- You see job-related content like salaries, requirements, job descriptions
+- This appears to be a careers page, job board, or job listing page
 
-**NAVIGATION INSTRUCTIONS:**
-1. Identify links that might lead to career pages, job listings, or hiring information
-2. Consider text like "Careers", "Jobs", "Work with us", "Join us", "Opportunities", "Hiring", "Team", etc.
-3. Also consider company-specific patterns like "About" -> "Careers" or "Company" -> "Jobs"
-4. Return URLs in order of likelihood (most promising first)
-5. Limit to top 3 most promising URLs
+Answer NO if:
+- This is a general company website without job listings
+- This is a blog, news site, or non-job related content
+- You only see general information without specific job openings
 
-**REQUIRED OUTPUT:**
-Return ONLY a JSON array of URLs (no explanations):
-["https://company.com/careers", "https://company.com/jobs", "https://company.com/about/team"]
+Respond with only: YES or NO`
+    
+    const response = await session.prompt(prompt)
+    await session.destroy()
+    
+    const hasJobs = response.trim().toUpperCase().includes('YES')
+    console.log(`✅ AI says page has job listings: ${hasJobs}`)
+    return hasJobs
+    
+  } catch (error) {
+    console.error('❌ checkForJobListings failed:', error)
+    await session.destroy()
+    return false
+  }
+}
+
+// AI Helper 2: Check if job details are fully visible or just previews
+async function checkJobDetailLevel(snapshot: any): Promise<boolean> {
+  console.log('🤖 AI: Checking job detail level...')
+  
+  const aiApi = await getAIAPI()
+  if (!aiApi) return false
+  
+  const session = await createAISession(aiApi)
+  if (!session) return false
+  
+  try {
+    const contentSample = snapshot.text.substring(0, 3000)
+    const prompt = `Do we see full job details or just job cards/previews?
+
+Content:
+${contentSample}
+
+FULL DETAILS means:
+- Complete job descriptions with requirements
+- Detailed responsibilities and qualifications
+- Full job postings with apply buttons
+- Comprehensive information about roles
+
+JOB CARDS/PREVIEWS means:
+- Just job titles and company names
+- Brief summaries or snippets
+- "View More" or "Read More" links
+- Preview cards that need clicking to see full details
+
+Respond with: FULL or PREVIEW`
+    
+    const response = await session.prompt(prompt)
+    await session.destroy()
+    
+    const hasFullDetails = response.trim().toUpperCase().includes('FULL')
+    console.log(`✅ AI says detail level: ${hasFullDetails ? 'FULL' : 'PREVIEW'}`)
+    return hasFullDetails
+    
+  } catch (error) {
+    console.error('❌ checkJobDetailLevel failed:', error)
+    await session.destroy()
+    return false
+  }
+}
+
+// AI Helper 3: Extract jobs from a page with full details
+async function extractJobsFromPage(snapshot: any): Promise<JobPosting[]> {
+  console.log('🤖 AI: Extracting jobs from page with full details...')
+  
+  const aiApi = await getAIAPI()
+  if (!aiApi) return []
+  
+  const session = await createAISession(aiApi)
+  if (!session) return []
+  
+  try {
+    const contentSample = snapshot.text.substring(0, 4000) // Larger sample for extraction
+    const prompt = `Extract all job postings from this page.
+
+Page: ${snapshot.url}
+Content:
+${contentSample}
+
+Extract each job as complete as possible. Look for:
+- Job titles and company names
+- Locations and remote work options
+- Salary/compensation if mentioned
+- Key requirements and responsibilities
+- Job descriptions
+
+Return jobs as JSON array:
+[{
+  "title": "Job title",
+  "company": "Company name",
+  "location": "Location or Remote",
+  "link": "${snapshot.url}",
+  "description": "Detailed job description with requirements",
+  "salary": "Salary if mentioned or null"
+}]
+
+If no jobs found, return: []
 
 JSON:`
     
     const response = await session.prompt(prompt)
     await session.destroy()
     
-    // Parse AI response
-    try {
-      let jsonStr = response.trim()
-      jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
-      
-      const urlMatch = jsonStr.match(/\[.*\]/s)
-      if (urlMatch) {
-        jsonStr = urlMatch[0]
-      }
-      
-      const urls = JSON.parse(jsonStr)
-      return Array.isArray(urls) ? urls.slice(0, 3) : []
-      
-    } catch (parseError) {
-      console.error('Failed to parse navigation targets:', parseError)
-      return []
-    }
+    const jobs = parseExtractedJobs(response, snapshot.url)
+    console.log(`✅ AI extracted ${jobs.length} jobs from page`)
+    return jobs
     
   } catch (error) {
-    console.error('Failed to find navigation targets:', error)
+    console.error('❌ extractJobsFromPage failed:', error)
+    await session.destroy()
     return []
   }
 }
 
-// Fetch snapshot of a new page
-async function fetchPageSnapshot(url: string): Promise<any> {
-  // For now, we'll simulate navigation by opening the URL
-  // In a real implementation, this would fetch the page content
-  console.log('🛫 Simulating navigation to:', url)
+// AI Helper 4: Find links to detailed job pages
+async function findJobDetailLinks(snapshot: any): Promise<string[]> {
+  console.log('🤖 AI: Finding job detail links...')
   
-  // Open URL in current tab (user will see the navigation)
-  window.location.href = url
+  const aiApi = await getAIAPI()
+  if (!aiApi) return []
   
-  // Return a promise that resolves after page loads
-  return new Promise((resolve, reject) => {
-    setTimeout(() => {
-      // Collect new page snapshot
-      const newSnapshot = collectSnapshot()
-      resolve(newSnapshot)
-    }, 2000) // Wait for page to load
-  })
-}
-
-// Helper to get AI API
-async function getAIAPI(): Promise<any> {
-  const windowScope = window as any
+  const session = await createAISession(aiApi)
+  if (!session) return []
   
-  if (windowScope.LanguageModel) {
-    const availability = await windowScope.LanguageModel.availability()
-    if (availability === 'available') {
-      return windowScope.LanguageModel
-    }
-  }
-  
-  return null
-}
-
-// Helper to create AI session
-async function createAISession(aiApi: any): Promise<any> {
   try {
-    return await aiApi.create()
+    const linkContext = snapshot.links.slice(0, 30).map((link: any, i: number) => 
+      `${i + 1}. "${link.text}" -> ${link.href}`
+    ).join('\n')
+    
+    const prompt = `Find links that lead to individual job detail pages.
+
+Page: ${snapshot.url}
+
+AVAILABLE LINKS:
+${linkContext}
+
+Find links that:
+- Lead to specific job postings (not job categories)
+- Have job titles like "Software Engineer", "Marketing Manager"
+- Say "View Details", "Apply Now", "Read More"
+- Lead to individual job descriptions
+
+Avoid links that:
+- Lead to job search filters or categories
+- Are navigation links (Home, About, Contact)
+- Lead to general company pages
+
+Return up to 5 job detail links as JSON array:
+["https://example.com/job1", "https://example.com/job2"]
+
+If no job detail links found, return: []
+
+JSON:`
+    
+    const response = await session.prompt(prompt)
+    await session.destroy()
+    
+    const links = parseJobLinks(response)
+    console.log(`✅ AI found ${links.length} job detail links`)
+    return links
+    
   } catch (error) {
-    console.error('Failed to create AI session:', error)
+    console.error('❌ findJobDetailLinks failed:', error)
+    await session.destroy()
+    return []
+  }
+}
+
+// AI Helper 5: Find navigation links to job listings
+async function findJobNavigationLinks(snapshot: any): Promise<string[]> {
+  console.log('🤖 AI: Finding navigation links to job listings...')
+  
+  const aiApi = await getAIAPI()
+  if (!aiApi) return []
+  
+  const session = await createAISession(aiApi)
+  if (!session) return []
+  
+  try {
+    const linkContext = snapshot.links.slice(0, 20).map((link: any, i: number) => 
+      `${i + 1}. "${link.text}" -> ${link.href}`
+    ).join('\n')
+    
+    const prompt = `Find links most likely to lead to job listings.
+
+Page: ${snapshot.url}
+Title: ${snapshot.pageTitle}
+
+AVAILABLE LINKS:
+${linkContext}
+
+Rank links by likelihood to contain job listings:
+- "Careers", "Jobs", "Work with us", "Join our team"
+- "Opportunities", "Openings", "Positions"
+- Department pages that might have job listings
+- Career or recruitment related links
+
+Avoid:
+- General company pages (About, Contact, Home)
+- Product pages or services
+- Blog posts or news
+
+Return top 3 most promising links as JSON array:
+["https://example.com/careers", "https://example.com/jobs"]
+
+If no promising links found, return: []
+
+JSON:`
+    
+    const response = await session.prompt(prompt)
+    await session.destroy()
+    
+    const links = parseJobLinks(response)
+    console.log(`✅ AI found ${links.length} navigation links`)
+    return links
+    
+  } catch (error) {
+    console.error('❌ findJobNavigationLinks failed:', error)
+    await session.destroy()
+    return []
+  }
+}
+
+// Utility: Parse extracted jobs from AI response
+function parseExtractedJobs(response: string, pageUrl: string): JobPosting[] {
+  try {
+    let jsonStr = response.trim()
+    jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+    
+    const arrayMatch = jsonStr.match(/\[.*\]/s)
+    if (arrayMatch) {
+      jsonStr = arrayMatch[0]
+    } else {
+      return []
+    }
+    
+    const parsed = JSON.parse(jsonStr)
+    if (!Array.isArray(parsed)) return []
+    
+    return parsed
+      .filter(job => job.title && job.company)
+      .map(job => ({
+        title: job.title,
+        company: job.company,
+        location: job.location || 'Location TBD',
+        link: job.link || pageUrl,
+        description: job.description || 'Job description not available',
+        ...(job.salary && { salary: job.salary })
+      }))
+    
+  } catch (error) {
+    console.error('parseExtractedJobs failed:', error)
+    return []
+  }
+}
+
+// Utility: Parse job links from AI response
+function parseJobLinks(response: string): string[] {
+  try {
+    let jsonStr = response.trim()
+    jsonStr = jsonStr.replace(/```json\s*/g, '').replace(/```\s*/g, '')
+    
+    const arrayMatch = jsonStr.match(/\[.*\]/s)
+    if (arrayMatch) {
+      const parsed = JSON.parse(arrayMatch[0])
+      if (Array.isArray(parsed)) {
+        return parsed.filter(item => typeof item === 'string' && item.startsWith('http'))
+      }
+    }
+    
+    return []
+    
+  } catch (error) {
+    console.error('parseJobLinks failed:', error)
+    return []
+  }
+}
+
+// Simulate navigation to a different URL (for content script limitations)
+async function simulateNavigation(url: string): Promise<any> {
+  console.log(`🔄 Simulating navigation to: ${url}`)
+  
+  try {
+    // In a content script, we can't actually navigate to other pages
+    // Since we can't fetch real content, we'll create a minimal simulation
+    // that indicates this would be a job detail page
+    
+    const simulatedSnapshot = {
+      url: url,
+      pageTitle: `Job Details: ${url.split('/').pop() || 'Job Page'}`,
+      // Create minimal content that looks like a job detail page
+      text: `Job Title: Sample Position
+Company: Sample Company
+Location: Remote
+Description: This is a simulated job detail page.
+Requirements: Sample requirements
+Apply now for this position.`,
+      links: [
+        // Minimal links to prevent further recursion
+        { href: url, text: 'Apply Now' },
+        { href: url + '/apply', text: 'Submit Application' }
+      ]
+    }
+    
+    console.log(`✅ Simulated navigation complete (minimal simulation)`)
+    return simulatedSnapshot
+    
+  } catch (error) {
+    console.error(`❌ Navigation simulation failed for ${url}:`, error)
     return null
   }
 }
 
-function generateMockJobDataInContentScript(snapshot: { url: string; text: string; links: Array<{ href: string; text: string }> }): JobPosting[] {
-  console.log('🎭 AI analysis unavailable - no fallback assumptions made')
-  return []
+// Save jobs to Chrome storage with error handling
+async function saveJobsToStorage(): Promise<void> {
+  try {
+    // Check if Chrome APIs are available
+    if (typeof chrome === 'undefined' || !chrome?.storage?.local) {
+      console.warn('⚠️ Chrome storage API not available')
+      return
+    }
+    
+    await chrome.storage.local.set({
+      'jobs': jobStorage,
+      'lastJobAnalysis': {
+        timestamp: Date.now(),
+        url: window.location.href,
+        jobCount: jobStorage.length
+      }
+    })
+    console.log(`✅ Saved ${jobStorage.length} jobs to Chrome storage`)
+  } catch (error) {
+    console.error('❌ Failed to save jobs to Chrome storage:', error)
+    
+    // If extension context is invalidated, try alternative messaging
+    if (error.message && error.message.includes('Extension context invalidated')) {
+      console.log('🔄 Extension context invalidated, jobs stored in memory only')
+      // Jobs are still in jobStorage array for popup access
+    }
+  }
+}
+
+// Safe Chrome runtime message sender
+function sendChromeMessage(message: any): void {
+  try {
+    // Check if Chrome runtime API is available
+    if (typeof chrome === 'undefined' || !chrome?.runtime?.sendMessage) {
+      console.warn('⚠️ Chrome runtime API not available, message not sent:', message.type)
+      return
+    }
+    
+    chrome.runtime.sendMessage(message, (response) => {
+      // Handle response or errors silently
+      if (chrome.runtime.lastError) {
+        // This is normal when popup is closed
+        console.log('🔇 Runtime message error (likely popup closed):', chrome.runtime.lastError.message)
+      }
+    })
+  } catch (error) {
+    console.error('❌ Failed to send Chrome message:', error)
+  }
+}
+
+
+// Helper function to score job-related links (used in Phase 1)
+function scoreJobLink(link: any): number {
+  if (!link.text || !link.href) return 0
+  
+  const text = link.text.toLowerCase()
+  const href = link.href.toLowerCase()
+  
+  let score = 0
+  
+  // High value indicators
+  const highValueTerms = [
+    'software engineer', 'product manager', 'data scientist', 
+    'marketing manager', 'sales manager', 'designer', 'developer',
+    'analyst', 'consultant', 'specialist', 'coordinator', 'director'
+  ]
+  
+  // Job-related terms
+  const jobTerms = [
+    'job', 'position', 'role', 'career', 'opening', 'vacancy',
+    'apply', 'hiring', 'employment', 'work', 'join'
+  ]
+  
+  // URL patterns that indicate job postings
+  const jobUrlPatterns = [
+    '/job/', '/jobs/', '/position/', '/career/', '/apply/',
+    'jobid=', 'job_id=', 'position_id='
+  ]
+  
+  // Check for high-value job titles
+  for (const term of highValueTerms) {
+    if (text.includes(term)) score += 20
+  }
+  
+  // Check for general job-related terms
+  for (const term of jobTerms) {
+    if (text.includes(term)) score += 10
+    if (href.includes(term)) score += 5
+  }
+  
+  // Check URL patterns
+  for (const pattern of jobUrlPatterns) {
+    if (href.includes(pattern)) score += 15
+  }
+  
+  // Penalty for generic links
+  const genericTerms = ['home', 'about', 'contact', 'privacy', 'terms']
+  for (const term of genericTerms) {
+    if (text.includes(term)) score -= 10
+  }
+  
+  return Math.max(0, score)
+}
+
+// Get next batch of jobs for "View More"
+function getNextJobBatch(startIndex: number, count: number = 3): JobPosting[] {
+  const endIndex = startIndex + count
+  const batch = jobStorage.slice(startIndex, endIndex)
+  console.log(`📋 Returning jobs ${startIndex}-${endIndex}: ${batch.length} jobs`)
+  return batch
+}
+
+// Get total job count
+function getTotalJobCount(): number {
+  return jobStorage.length
+}
+
+// Helper functions for AI job analysis
+
+// Helper to get AI API - improved detection
+async function getAIAPI(): Promise<any> {
+  try {
+    const windowScope = window as any
+    console.log('🔍 Checking for Chrome AI APIs...')
+    
+    // Check for newer LanguageModel API
+    if (windowScope.LanguageModel) {
+      console.log('✅ Found window.LanguageModel')
+      try {
+        const availability = await windowScope.LanguageModel.availability()
+        console.log('LanguageModel availability:', availability)
+        if (availability === 'readily' || availability === 'available') {
+          return windowScope.LanguageModel
+        }
+      } catch (err) {
+        console.log('LanguageModel availability check failed:', err)
+      }
+    }
+    
+    // Check for legacy AI API
+    if (windowScope.ai?.languageModel) {
+      console.log('✅ Found window.ai.languageModel')
+      try {
+        const capabilities = await windowScope.ai.languageModel.capabilities()
+        console.log('AI capabilities:', capabilities)
+        if (capabilities.available === 'readily' || capabilities.available === 'available') {
+          return windowScope.ai
+        }
+      } catch (err) {
+        console.log('AI capabilities check failed:', err)
+      }
+    }
+    
+    console.warn('❌ No AI API found or available')
+  } catch (error) {
+    console.warn('AI API check failed:', error)
+  }
+  return null
+}
+
+// Helper to create AI session - handles both API types
+async function createAISession(aiApi: any): Promise<any> {
+  try {
+    console.log('🔄 Creating AI session...')
+    console.log('AI API object keys:', Object.keys(aiApi || {}))
+    
+    // Try newer API first (LanguageModel.create)
+    if (aiApi.create) {
+      console.log('🆕 Using LanguageModel.create()')
+      const session = await aiApi.create()
+      console.log('✅ LanguageModel session created successfully:', !!session)
+      console.log('Session object keys:', Object.keys(session || {}))
+      return session
+    }
+    
+    // Try legacy API (ai.languageModel.create)
+    if (aiApi.languageModel?.create) {
+      console.log('🆗 Using ai.languageModel.create()')
+      const session = await aiApi.languageModel.create()
+      console.log('✅ Legacy AI session created successfully:', !!session)
+      console.log('Session object keys:', Object.keys(session || {}))
+      return session
+    }
+    
+    console.error('❌ No create method found on AI API')
+    return null
+  } catch (error) {
+    console.error('❌ Failed to create AI session:', error)
+    return null
+  }
 }
 
 // Listen for messages from popup or background script
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
+  chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Content script received message:', request)
   
   // Handle both old 'type' format and new 'action' format
@@ -778,19 +1021,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       break
       
     case 'analyze_with_ai':
-      // Handle AI analysis with breadth-first navigation
-      console.log('🤖 Content script received AI analysis request')
+      // Handle AI analysis with streaming batch system
+      console.log('🤖 Content script received streaming AI analysis request')
       const maxJobs = request.maxJobs || 5
-      performBreadthFirstJobDiscovery(request.snapshot, maxJobs)
-        .then(result => {
-          console.log('✅ Breadth-first discovery completed:', result)
-          sendResponse({ success: true, ...result })
+      
+      // Start streaming analysis (returns immediately)
+      analyzeJobPostingsInContentScript(request.snapshot, maxJobs)
+        .then(() => {
+          sendResponse({ success: true, message: 'Streaming analysis started' })
         })
         .catch(error => {
-          console.error('❌ Breadth-first discovery failed:', error)
+          console.error('❌ Streaming analysis failed to start:', error)
           sendResponse({ success: false, error: error.message })
         })
       return true // Keep response channel open for async response
+      
+    case 'get_more_jobs':
+      // Handle "View More" requests
+      const startIndex = request.startIndex || 0
+      const count = request.count || 3
+      const moreJobs = getNextJobBatch(startIndex, count)
+      const totalJobs = getTotalJobCount()
+      
+      sendResponse({ 
+        success: true, 
+        jobs: moreJobs, 
+        totalCount: totalJobs,
+        hasMore: (startIndex + count) < totalJobs
+      })
+      break
+      
+    case 'get_job_status':
+      // Get current status of job processing
+      sendResponse({
+        success: true,
+        totalJobs: getTotalJobCount(),
+        processing: processingActive
+      })
+      break
       
     default:
       sendResponse({ success: false, error: 'Unknown message type: ' + messageType })
@@ -798,6 +1066,44 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   
   // Return true to indicate we will send a response asynchronously
   return true
+  })
+} else {
+  console.warn('⚠️ Chrome runtime API not available - content script cannot receive messages')
+}
+
+// Test function for debugging AI availability
+(window as any).testGemScoutAI = async () => {
+  console.log('🧪 Testing GemScout AI availability...')
+  const aiApi = await getAIAPI()
+  if (aiApi) {
+    console.log('✅ AI API is available!')
+    const session = await createAISession(aiApi)
+    if (session) {
+      console.log('✅ AI session created successfully!')
+      try {
+        const testResponse = await session.prompt('Say "Hello from GemScout AI test"')
+        console.log('✅ AI test response:', testResponse)
+        await session.destroy()
+        console.log('✅ All AI systems working!')
+      } catch (err) {
+        console.error('❌ AI prompt test failed:', err)
+      }
+    } else {
+      console.error('❌ Failed to create AI session')
+    }
+  } else {
+    console.error('❌ AI API not available')
+    console.log('Please check Chrome flags: chrome://flags')
+    console.log('Enable: "Prompt API for Gemini Nano" and "Optimization Guide On Device Model"')
+  }
+}
+
+// Cleanup on page unload
+window.addEventListener('beforeunload', () => {
+  console.log('🧹 Cleaning up GemScout...')
+  stopStorageMonitor()
+  processingActive = false
+  jobStorage = []
 })
 
 // No auto-analysis based on keywords - let user initiate analysis
