@@ -16,8 +16,6 @@ const Popup: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string>('')
   const [lastAnalyzed, setLastAnalyzed] = useState<string>('')
   const [analysisProgress, setAnalysisProgress] = useState(0)
-  const [canLoadMore, setCanLoadMore] = useState(false)
-  const [maxJobsFound, setMaxJobsFound] = useState(5)
   const [navigationPath, setNavigationPath] = useState<string[]>([])
   const [discoveredAt, setDiscoveredAt] = useState<string>('')
   const [streamingActive, setStreamingActive] = useState(false)
@@ -38,8 +36,15 @@ const Popup: React.FC = () => {
     const port = chrome.runtime.connect({ name: 'popup-stream' })
     
     port.onMessage.addListener((message) => {
+      console.log('📢 DEBUG: Popup received message:', message)
+      
       if (message.type === 'jobs_update') {
-        console.log(`📢 Received streaming update: ${message.count} jobs available`)
+        console.log(`📢 DEBUG: Received streaming update: ${message.count} jobs available, isComplete: ${message.isComplete}`)
+        console.log('📘 DEBUG: Message details:', { 
+          batchNumber: message.batchNumber, 
+          jobsInBatch: message.jobs?.length, 
+          totalCount: message.count 
+        })
         
         // Reload jobs from storage when we get updates
         loadJobsFromStorage()
@@ -48,7 +53,6 @@ const Popup: React.FC = () => {
           setIsAnalyzing(false)
           setAnalysisProgress(100)
           setStreamingActive(false)
-          setCanLoadMore(message.count > 3)
           setErrorMessage('')
           setJobsDisplayed(message.count)
         }
@@ -69,6 +73,17 @@ const Popup: React.FC = () => {
         setStreamingActive(false)
         setAnalysisProgress(0)
         setErrorMessage(message.error || 'Analysis failed')
+      } else if (message.type === 'analysis_cancelled') {
+        console.log(`⚠️ DEBUG: Analysis was cancelled: ${message.reason}`)
+        setIsAnalyzing(false)
+        setStreamingActive(false)
+        setAnalysisProgress(0)
+        if (message.reason === 'New analysis requested') {
+          // Don't show error for intentional restart
+          console.log('🔄 DEBUG: Analysis restarted by user')
+        } else {
+          setErrorMessage(`Analysis stopped: ${message.reason}`)
+        }
       }
     })
     
@@ -80,8 +95,10 @@ const Popup: React.FC = () => {
   // Function to load jobs from Chrome storage
   const loadJobsFromStorage = async () => {
     try {
-      const result = await chrome.storage.local.get(['jobs', 'lastJobAnalysis'])
-      const storedJobs = result.jobs || []
+      console.log('📖 DEBUG: Loading jobs from storage...')
+      const result = await chrome.storage.local.get(['gemscout_jobs', 'lastJobAnalysis'])
+      const storedJobs = result.gemscout_jobs || []
+      console.log('📖 DEBUG: Loaded jobs from storage:', { count: storedJobs.length, jobs: storedJobs.slice(0, 2) })
       setJobs(storedJobs)
       
       // Set last analyzed info
@@ -95,9 +112,16 @@ const Popup: React.FC = () => {
   }
 
   const analyzeCurrentPage = async (maxJobs: number = 5) => {
+    // Clear any previous error messages immediately
+    setErrorMessage('')
+    
+    // If already analyzing, this will trigger a restart in the background
+    if (isAnalyzing) {
+      console.log('🔄 DEBUG: Restarting analysis (cancelling current)')
+    }
+    
     setIsAnalyzing(true)
     setStreamingActive(true)
-    setErrorMessage('')
     setAnalysisProgress(0)
     setJobs([]) // Clear existing jobs
     setJobsDisplayed(0)
@@ -163,47 +187,16 @@ const Popup: React.FC = () => {
     }
   }
 
-  const toggleOverlay = async () => {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-    if (tab.id) {
-      chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_OVERLAY' })
-    }
-  }
-
-  const openOptions = () => {
-    chrome.runtime.openOptionsPage()
-  }
-  
-  const viewMoreJobs = async () => {
-    try {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (tab.id) {
-        chrome.tabs.sendMessage(tab.id, {
-          action: 'get_more_jobs',
-          startIndex: jobsDisplayed,
-          count: 3
-        }, (response) => {
-          if (response?.success && response.jobs) {
-            setJobs(prevJobs => [...prevJobs, ...response.jobs])
-            setJobsDisplayed(prev => prev + response.jobs.length)
-            setCanLoadMore(response.hasMore)
-          }
-        })
-      }
-    } catch (error) {
-      console.error('Failed to load more jobs:', error)
-    }
-  }
-  
   const clearJobs = async () => {
     try {
-      await chrome.storage.local.remove(['jobs', 'lastJobAnalysis'])
+      console.log('🗑️ DEBUG: Clearing jobs from storage...')
+      await chrome.storage.local.remove(['gemscout_jobs', 'lastJobAnalysis'])
       setJobs([])
       setJobsDisplayed(0)
       setLastAnalyzed('')
-      console.log('Jobs cleared successfully')
+      console.log('✅ DEBUG: Jobs cleared successfully')
     } catch (error) {
-      console.error('Failed to clear jobs:', error)
+      console.error('❌ DEBUG: Failed to clear jobs:', error)
     }
   }
 
@@ -212,19 +205,20 @@ const Popup: React.FC = () => {
       {/* Header */}
       <div className="bg-blue-600 text-white p-4">
         <h1 className="text-xl font-bold mb-1">GemScout</h1>
-        <p className="text-blue-100 text-sm">AI Job Discovery Assistant</p>
       </div>
+      
+      {/* Quick Stats */}
+      {jobs.length > 0 && (
+        <div className="pt-4 border-t border-gray-200 text-center">
+          <div>
+            <div className="text-lg font-bold text-blue-600">{jobs.length}</div>
+            <div className="text-xs text-gray-600">Jobs Found</div>
+          </div>
+        </div>
+      )}  
 
       {/* Main Content */}
       <div className="p-4">
-        {/* Current Page Info */}
-        <div className="mb-4">
-          <h3 className="font-semibold text-gray-800 mb-2">Current Page</h3>
-          <p className="text-sm text-gray-600 truncate">
-            {currentUrl || 'Loading...'}
-          </p>
-        </div>
-
         {/* Error Message */}
         {errorMessage && (
           <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg">
@@ -237,8 +231,11 @@ const Popup: React.FC = () => {
           <div className="space-y-2">
             <button
               onClick={() => analyzeCurrentPage(5)}
-              disabled={isAnalyzing}
-              className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white font-medium py-2 px-4 rounded transition-colors flex items-center justify-center"
+              className={`w-full font-medium py-2 px-4 rounded transition-colors flex items-center justify-center ${
+                isAnalyzing 
+                  ? 'bg-orange-500 hover:bg-orange-600 text-white' 
+                  : 'bg-blue-500 hover:bg-blue-600 text-white'
+              }`}
             >
               {isAnalyzing ? (
                 <>
@@ -246,10 +243,10 @@ const Popup: React.FC = () => {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Finding Jobs...
+                  Finding Jobs... (Click to Restart)
                 </>
               ) : (
-                'Find Jobs (Streaming)'
+                'Find Jobs'
               )}
             </button>
             
@@ -263,19 +260,6 @@ const Popup: React.FC = () => {
               </div>
             )}
             
-            {/* View More Jobs Button - for streaming */}
-            {canLoadMore && !isAnalyzing && jobs.length > 0 && (
-              <button
-                onClick={viewMoreJobs}
-                className="w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded transition-colors flex items-center justify-center text-sm"
-              >
-                <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
-                </svg>
-                View More Jobs (Next 3)
-              </button>
-            )}
-            
             {/* Streaming indicator */}
             {streamingActive && (
               <div className="text-sm text-blue-600 text-center p-2 bg-blue-50 rounded">
@@ -284,19 +268,6 @@ const Popup: React.FC = () => {
             )}
           </div>
           
-          <button
-            onClick={toggleOverlay}
-            className="w-full bg-green-500 hover:bg-green-600 text-white font-medium py-2 px-4 rounded transition-colors"
-          >
-            Toggle Job Overlay
-          </button>
-          
-          <button
-            onClick={openOptions}
-            className="w-full bg-gray-500 hover:bg-gray-600 text-white font-medium py-2 px-4 rounded transition-colors"
-          >
-            Open Settings
-          </button>
         </div>
 
         {/* Job Listings */}
@@ -400,22 +371,6 @@ const Popup: React.FC = () => {
             </div>
           )}
         </div>
-
-        {/* Quick Stats */}
-        {jobs.length > 0 && (
-          <div className="pt-4 border-t border-gray-200">
-            <div className="grid grid-cols-2 gap-4 text-center">
-              <div>
-                <div className="text-lg font-bold text-blue-600">{jobs.length}</div>
-                <div className="text-xs text-gray-600">Jobs Found</div>
-              </div>
-              <div>
-                <div className="text-lg font-bold text-green-600">Ready</div>
-                <div className="text-xs text-gray-600">Status</div>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   )

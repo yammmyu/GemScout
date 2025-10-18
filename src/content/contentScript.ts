@@ -291,24 +291,41 @@ function stopStorageMonitor() {
 // Main recursive job scanning system
 async function analyzeJobPostingsInContentScript(snapshot: any, maxJobs: number = 5): Promise<JobPosting[]> {
   console.log('🔄 Starting RECURSIVE job scanning system...')
+  console.log('🔍 DEBUG: Input parameters:')
+  console.log('  - snapshot.url:', snapshot.url)
+  console.log('  - snapshot.text length:', snapshot.text.length)
+  console.log('  - snapshot.links count:', snapshot.links.length)
+  console.log('  - maxJobs requested:', maxJobs)
   
   // Reset storage for new analysis
   jobStorage = []
   monitorStartTime = Date.now()
   
+  console.log('🔍 DEBUG: Reset jobStorage, length now:', jobStorage.length)
+  
   // Set processing active first
   processingActive = true
+  console.log('🔍 DEBUG: Set processingActive to true')
   
   // Start storage monitoring first
   startStorageMonitor()
+  console.log('🔍 DEBUG: Started storage monitor')
   
   // Start recursive scanning (don't await)
-  const visitedUrls = new Set([snapshot.url])
+  const visitedUrls = new Set<string>() // Start empty - let recursiveJobScan add URLs
+  console.log('🔍 DEBUG: Created empty visitedUrls set')
+  
   recursiveJobScan(snapshot, maxJobs, visitedUrls, 0).catch(error => {
-    console.error('Recursive scanning failed:', error)
+    console.error('❌ Recursive scanning failed:', error)
+    console.log('🔍 DEBUG: Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack
+    })
     processingActive = false
   })
   
+  console.log('🔍 DEBUG: Recursive scan started, returning empty array')
   // Return immediately - jobs will be provided via storage updates
   return []
 }
@@ -319,49 +336,65 @@ async function recursiveJobScan(snapshot: any, maxJobs: number, visitedUrls: Set
   const MAX_LINKS_PER_PAGE = 3 // Reduced links to follow per page
   const MAX_TOTAL_VISITS = 10 // Maximum total URLs to visit
   
-  console.log(`🔍 Recursive scan: ${snapshot.url} (depth: ${depth}, visited: ${visitedUrls.size})`)
+  console.log(`\n🔍 === RECURSIVE SCAN START ===`)
+  console.log(`🔍 URL: ${snapshot.url}`)
+  console.log(`🔍 Depth: ${depth}/${MAX_DEPTH}`)
+  console.log(`🔍 Visited URLs: ${visitedUrls.size}/${MAX_TOTAL_VISITS}`)
+  console.log(`🔍 Current job count: ${jobStorage.length}/${maxJobs}`)
+  console.log(`🔍 Snapshot text length: ${snapshot.text.length}`)
+  console.log(`🔍 Snapshot links: ${snapshot.links.length}`)
   
   // Multiple exit conditions to prevent infinite loops
   if (depth >= MAX_DEPTH) {
-    console.log('⚠️ Max depth reached, stopping recursion')
+    console.log('⚠️ EXIT: Max depth reached, stopping recursion')
     return
   }
   
   if (visitedUrls.size >= MAX_TOTAL_VISITS) {
-    console.log('⚠️ Max URLs visited, stopping recursion')
+    console.log('⚠️ EXIT: Max URLs visited, stopping recursion')
     return
   }
   
   if (jobStorage.length >= maxJobs) {
-    console.log('✅ Max jobs reached, stopping scan')
+    console.log('✅ EXIT: Max jobs reached, stopping scan')
     processingActive = false
     return
   }
   
   // Check if we've already processed this URL
   if (visitedUrls.has(snapshot.url)) {
-    console.log('⚠️ URL already visited, skipping:', snapshot.url)
+    console.log('⚠️ EXIT: URL already visited, skipping:', snapshot.url)
+    console.log('🔍 DEBUG: Visited URLs list:', Array.from(visitedUrls))
     return
   }
   
   // Mark this URL as visited immediately to prevent re-entry
   visitedUrls.add(snapshot.url)
+  console.log('🔍 DEBUG: Added URL to visited set. New size:', visitedUrls.size)
   
   try {
+    console.log('🔍 DEBUG: Starting AI analysis steps...')
+    
     // Step 1: Ask AI if this page contains job listings
+    console.log('🤖 STEP 1: Checking if page contains job listings...')
     const hasJobListings = await checkForJobListings(snapshot)
+    console.log(`🔍 DEBUG: Step 1 result - hasJobListings: ${hasJobListings}`)
     
     if (hasJobListings) {
-      console.log('✅ Page contains job listings')
+      console.log('✅ Page contains job listings - proceeding to step 2')
       
       // Step 2: Ask AI about the level of detail
+      console.log('🤖 STEP 2: Checking job detail level...')
       const hasFullDetails = await checkJobDetailLevel(snapshot)
+      console.log(`🔍 DEBUG: Step 2 result - hasFullDetails: ${hasFullDetails}`)
       
       if (hasFullDetails) {
-        console.log('✅ Full job details visible, extracting data...')
+        console.log('📝 FULL DETAILS PATH: Extracting data from full job details...')
         const jobs = await extractJobsFromPage(snapshot)
+        console.log(`🔍 DEBUG: extractJobsFromPage returned ${jobs.length} jobs:`, jobs)
         
         if (jobs.length > 0) {
+          console.log(`✅ SUCCESS: Found ${jobs.length} jobs, adding to storage`)
           jobStorage.push(...jobs)
           await saveJobsToStorage()
           console.log(`✅ Extracted ${jobs.length} jobs (total: ${jobStorage.length})`)
@@ -374,17 +407,61 @@ async function recursiveJobScan(snapshot: any, maxJobs: number, visitedUrls: Set
             totalJobs: jobStorage.length,
             isComplete: false
           })
+        } else {
+          console.log('⚠️ FALLBACK: AI said FULL but extracted 0 jobs - treating as PREVIEW instead')
+          console.log('🔍 DEBUG: Switching from FULL to PREVIEW mode due to 0 jobs')
+          
+          // Fall back to preview mode - find job detail links
+          console.log('🤖 STEP 3: Finding job detail links...')
+          const jobDetailLinks = await findJobDetailLinks(snapshot)
+          console.log(`🔍 DEBUG: findJobDetailLinks returned ${jobDetailLinks.length} links:`, jobDetailLinks)
+          
+          // Follow job detail links
+          console.log(`🔗 PROCESSING: Following ${Math.min(jobDetailLinks.length, MAX_LINKS_PER_PAGE)} job detail links...`)
+          for (const link of jobDetailLinks.slice(0, MAX_LINKS_PER_PAGE)) {
+            if (jobStorage.length >= maxJobs) {
+              console.log('✅ Breaking loop: Max jobs reached')
+              break
+            }
+            if (visitedUrls.has(link)) {
+              console.log('⚠️ Skipping already visited link:', link)
+              continue
+            }
+            
+            console.log(`🔗 Following job detail link: ${link}`)
+            
+            // Simulate navigation to job detail page
+            console.log(`🔄 Simulating navigation to: ${link}`)
+            const detailSnapshot = await simulateNavigation(link)
+            console.log(`🔍 DEBUG: Simulation result:`, !!detailSnapshot)
+            if (detailSnapshot) {
+              console.log(`🔄 RECURSING to depth ${depth + 1} for: ${link}`)
+              await recursiveJobScan(detailSnapshot, maxJobs, visitedUrls, depth + 1)
+              console.log(`🔄 RETURNED from depth ${depth + 1}, waiting 1s...`)
+              await new Promise(resolve => setTimeout(resolve, 1000)) // Rate limiting
+            } else {
+              console.log(`❌ Simulation failed for: ${link}`)
+            }
+          }
         }
       } else {
-        console.log('⚠️ Only job cards/previews visible, finding detail links...')
+        console.log('📎 PREVIEW PATH: Only job cards/previews visible, finding detail links...')
         const jobDetailLinks = await findJobDetailLinks(snapshot)
+        console.log(`🔍 DEBUG: PREVIEW PATH findJobDetailLinks returned ${jobDetailLinks.length} links:`, jobDetailLinks)
         
         // Follow job detail links
+        console.log(`🔗 PREVIEW PROCESSING: Following ${Math.min(jobDetailLinks.length, MAX_LINKS_PER_PAGE)} job detail links...`)
         for (const link of jobDetailLinks.slice(0, MAX_LINKS_PER_PAGE)) {
-          if (jobStorage.length >= maxJobs) break
-          if (visitedUrls.has(link)) continue
+          if (jobStorage.length >= maxJobs) {
+            console.log('✅ PREVIEW Breaking loop: Max jobs reached')
+            break
+          }
+          if (visitedUrls.has(link)) {
+            console.log('⚠️ PREVIEW Skipping already visited link:', link)
+            continue
+          }
           
-          console.log(`🔗 Following job detail link: ${link}`)
+          console.log(`🔗 PREVIEW Following job detail link: ${link}`)
           
           // Simulate navigation to job detail page
           const detailSnapshot = await simulateNavigation(link)
@@ -395,17 +472,27 @@ async function recursiveJobScan(snapshot: any, maxJobs: number, visitedUrls: Set
         }
       }
     } else {
-      console.log('❌ No job listings found, looking for navigation links...')
+      console.log('❌ NO JOBS PATH: No job listings found, looking for navigation links...')
+      console.log('🔍 DEBUG: Page did not contain job listings, trying navigation approach')
       
       // Step 3: Ask AI for links most likely to lead to job listings
+      console.log('🤖 STEP 3: Finding navigation links to job listings...')
       const jobNavLinks = await findJobNavigationLinks(snapshot)
+      console.log(`🔍 DEBUG: findJobNavigationLinks returned ${jobNavLinks.length} links:`, jobNavLinks)
       
       // Follow top-ranked navigation links
+      console.log(`🔗 NAV PROCESSING: Following ${Math.min(jobNavLinks.length, 2)} navigation links...`)
       for (const link of jobNavLinks.slice(0, 2)) { // Limit to top 2
-        if (jobStorage.length >= maxJobs) break
-        if (visitedUrls.has(link)) continue
+        if (jobStorage.length >= maxJobs) {
+          console.log('✅ NAV Breaking loop: Max jobs reached')
+          break
+        }
+        if (visitedUrls.has(link)) {
+          console.log('⚠️ NAV Skipping already visited link:', link)
+          continue
+        }
         
-        console.log(`🔗 Following navigation link: ${link}`)
+        console.log(`🔗 NAV Following navigation link: ${link}`)
         
         // Simulate navigation
         const navSnapshot = await simulateNavigation(link)
@@ -417,18 +504,28 @@ async function recursiveJobScan(snapshot: any, maxJobs: number, visitedUrls: Set
     }
     
   } catch (error) {
-    console.error(`❌ Recursive scan failed at ${snapshot.url}:`, error)
+    console.error(`❌ RECURSIVE SCAN ERROR at ${snapshot.url}:`, error)
+    console.log('🔍 DEBUG: Error details:', {
+      name: error.name,
+      message: error.message,
+      stack: error.stack?.substring(0, 500)
+    })
   } finally {
+    console.log(`🔍 DEBUG: Finally block - depth: ${depth}, jobStorage: ${jobStorage.length}`)
     if (depth === 0) {
       processingActive = false
-      console.log(`🏁 Recursive scanning complete: ${jobStorage.length} total jobs`)
+      console.log(`🏁 FINAL COMPLETION: Recursive scanning complete: ${jobStorage.length} total jobs`)
+      console.log('🔍 DEBUG: Final job storage contents:', jobStorage)
       
       // Send final completion message
+      console.log('📤 Sending final completion message to popup...')
       sendChromeMessage({
         type: 'analysis_complete',
         totalJobs: jobStorage.length,
         isComplete: true
       })
+    } else {
+      console.log(`🔍 DEBUG: Not root depth (${depth}), not sending completion message`)
     }
   }
 }
@@ -492,24 +589,26 @@ async function checkJobDetailLevel(snapshot: any): Promise<boolean> {
   
   try {
     const contentSample = snapshot.text.substring(0, 3000)
-    const prompt = `Do we see full job details or just job cards/previews?
+    const prompt = `Analyze this careers page to determine the level of job detail shown.
 
+Page: ${snapshot.url}
 Content:
 ${contentSample}
 
-FULL DETAILS means:
-- Complete job descriptions with requirements
-- Detailed responsibilities and qualifications
-- Full job postings with apply buttons
-- Comprehensive information about roles
+This is PREVIEW level if:
+- You see job titles like "Software Engineer", "Product Manager" but no detailed descriptions
+- You see "Apply Now" buttons or links to external job boards (like greenhouse.io)
+- You see location info but no detailed job requirements
+- This looks like a job listing page with cards/tiles that link to full job descriptions
+- Content mentions "See All Open Roles" or similar
 
-JOB CARDS/PREVIEWS means:
-- Just job titles and company names
-- Brief summaries or snippets
-- "View More" or "Read More" links
-- Preview cards that need clicking to see full details
+This is FULL level if:
+- You see complete job descriptions with detailed requirements (5+ requirements listed)
+- You see full responsibility lists and qualification details
+- You see salary ranges and comprehensive benefits information
+- The page shows the complete job posting, not just a preview
 
-Respond with: FULL or PREVIEW`
+Based on the content above, respond with: FULL or PREVIEW`
     
     const response = await session.prompt(prompt)
     await session.destroy()
@@ -818,8 +917,11 @@ function sendChromeMessage(message: any): void {
     chrome.runtime.sendMessage(message, (response) => {
       // Handle response or errors silently
       if (chrome.runtime.lastError) {
-        // This is normal when popup is closed
-        console.log('🔇 Runtime message error (likely popup closed):', chrome.runtime.lastError.message)
+        // Only log errors for important messages, not routine updates
+        if (message.type === 'analysis_complete' || message.type === 'analysis_error') {
+          console.log('🔇 Runtime message error (likely popup closed):', chrome.runtime.lastError.message)
+        }
+        // Suppress routine job update errors to reduce console noise
       }
     })
   } catch (error) {
@@ -978,8 +1080,22 @@ if (typeof chrome !== 'undefined' && chrome?.runtime?.onMessage) {
   const messageType = request.type || request.action
   
   switch (messageType) {
+    case 'ping':
+      // Simple ping response to test if content script is loaded
+      console.log('🏓 Content script ping received')
+      sendResponse({ success: true, message: 'pong', version: '2.0-enhanced' })
+      break
+      
     case 'ANALYZE_PAGE':
-      const pageData = analyzeCurrentPage()
+      // Analyze current page and return basic data
+      const pageData = {
+        url: window.location.href,
+        title: document.title,
+        description: getPageDescription(),
+        contentLength: document.body.innerText.length,
+        linkCount: document.querySelectorAll('a[href]').length
+      }
+      console.log('Basic page data (AI will determine relevance):', pageData)
       sendResponse({ success: true, data: pageData })
       break
       
